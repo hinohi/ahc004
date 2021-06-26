@@ -6,20 +6,26 @@ use rand_pcg::Mcg128Xsl64;
 
 const N: usize = 20;
 
-fn row_contain(x: usize, s: &[u8], row: &[Option<u8>; N]) -> bool {
-    let a = s
-        .iter()
-        .zip(row[x..].iter())
-        .all(|(s, i)| i.is_none() || *i == Some(*s));
+fn empty_count(x: usize, s: &[u8], row: &[Option<u8>; N]) -> Option<usize> {
+    let mut count = 0;
+    for (s, i) in s.iter().zip(row[x..].iter()) {
+        if i.is_none() {
+            count += 1;
+        } else if *i != Some(*s) {
+            return None;
+        }
+    }
     if x + s.len() <= N {
-        a
-    } else if a {
-        s[N - x..]
-            .iter()
-            .zip(row.iter())
-            .all(|(s, i)| i.is_none() || *i == Some(*s))
+        Some(count)
     } else {
-        false
+        for (s, i) in s[N - x..].iter().zip(row.iter()) {
+            if i.is_none() {
+                count += 1;
+            } else if *i != Some(*s) {
+                return None;
+            }
+        }
+        Some(count)
     }
 }
 
@@ -36,16 +42,17 @@ fn match_dna<R: Rng>(rng: &mut R, ss: &[Vec<u8>]) -> (u64, [[Option<u8>; N]; N])
     };
     let mut count = 0;
     let mut dna = [[None; N]; N];
-    'OUT: for s in ss {
+    for s in ss {
+        let mut best_match = None;
+        let mut best_pos = (0, 0, 0);
         for &y in yy.iter() {
-            let row = dna.get_mut(y).unwrap();
+            let row = dna.get(y).unwrap();
             for &x in xx.iter() {
-                if row_contain(x, s, row) {
-                    for (i, c) in s.iter().enumerate() {
-                        row[(x + i) % N] = Some(*c);
+                if let Some(m) = empty_count(x, s, row) {
+                    if best_match.is_none() || best_match.unwrap() > m {
+                        best_match = Some(m);
+                        best_pos = (0, x, y);
                     }
-                    count += 1;
-                    continue 'OUT;
                 }
             }
         }
@@ -58,12 +65,23 @@ fn match_dna<R: Rng>(rng: &mut R, ss: &[Vec<u8>]) -> (u64, [[Option<u8>; N]; N])
                 row
             };
             for &y in xx.iter() {
-                if row_contain(y, s, &row) {
-                    for (i, c) in s.iter().enumerate() {
-                        dna[(y + i) % N][x] = Some(*c);
+                if let Some(m) = empty_count(y, s, &row) {
+                    if best_match.is_none() || best_match.unwrap() > m {
+                        best_match = Some(m);
+                        best_pos = (1, x, y);
                     }
-                    count += 1;
-                    continue 'OUT;
+                }
+            }
+        }
+        if best_match.is_some() {
+            count += 1;
+            if best_pos.0 == 0 {
+                for (i, &c) in s.iter().enumerate() {
+                    dna[best_pos.2][(best_pos.1 + i) % N] = Some(c);
+                }
+            } else {
+                for (i, &c) in s.iter().enumerate() {
+                    dna[(best_pos.2 + i) % N][best_pos.1] = Some(c);
                 }
             }
         }
@@ -130,7 +148,7 @@ mod tests {
     fn test_row_contain_all_none() {
         let s = vec![b'A'; 12];
         for x in 0..N {
-            assert!(row_contain(x, &s, &[None; N]));
+            assert_eq!(empty_count(x, &s, &[None; N]), Some(12));
         }
     }
 
@@ -144,11 +162,11 @@ mod tests {
             None, None, None, None, None,
             None, None, None, None, None,
         ];
-        assert!(row_contain(0, &s, &row));
-        assert!(!row_contain(1, &s, &row));
-        assert!(!row_contain(2, &s, &row));
-        assert!(!row_contain(18, &s, &row));
-        assert!(!row_contain(19, &s, &row));
+        assert_eq!(empty_count(0, &s, &row), Some(0));
+        assert_eq!(empty_count(1, &s, &row), None);
+        assert_eq!(empty_count(2, &s, &row), None);
+        assert_eq!(empty_count(18, &s, &row), None);
+        assert_eq!(empty_count(19, &s, &row), None);
     }
 
     #[test]
@@ -161,16 +179,16 @@ mod tests {
             None, None, None, None, None,
             None, None, None, Some(b'H'), Some(b'A'),
         ];
-        assert!(row_contain(18, &s, &row));
-        assert!(!row_contain(17, &s, &row));
-        assert!(!row_contain(19, &s, &row));
-        assert!(!row_contain(0, &s, &row));
-        assert!(!row_contain(1, &s, &row));
+        assert_eq!(empty_count(18, &s, &row), Some(0));
+        assert_eq!(empty_count(17, &s, &row), None);
+        assert_eq!(empty_count(19, &s, &row), None);
+        assert_eq!(empty_count(0, &s, &row), None);
+        assert_eq!(empty_count(1, &s, &row), None);
     }
 
     #[test]
     fn test_row_contain_wrap2() {
-        let s = vec![b'H', b'D', b'B', b'C', b'H', b'D'];
+        let s = vec![b'H', b'A', b'F', b'C', b'H', b'D'];
         #[rustfmt::skip]
             let row = [
             None, Some(b'A'), Some(b'F'), None, None,
@@ -178,9 +196,9 @@ mod tests {
             None, None, None, None, None,
             None, None, None, None, None,
         ];
-        assert!(!row_contain(0, &s, &row));
-        assert!(!row_contain(1, &s, &row));
-        assert!(!row_contain(18, &s, &row));
-        assert!(!row_contain(19, &s, &row));
+        assert_eq!(empty_count(0, &s, &row), Some(4));
+        assert_eq!(empty_count(1, &s, &row), None);
+        assert_eq!(empty_count(18, &s, &row), None);
+        assert_eq!(empty_count(19, &s, &row), None);
     }
 }
